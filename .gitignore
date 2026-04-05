@@ -1,0 +1,49 @@
+# ── Données brutes (trop volumineuses pour git) ────────────────────────────────
+data/raw/
+data/processed/
+data/submissions/
+
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Environnements virtuels ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Éditeurs ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Modèles entraînés (potentiellement volumineux) ────────────────────────────
+*.pth
+*.pt
+*.ckpt
+*.h5
+# Autoriser explicitement les .h5 de référence dans references/ si besoin :
+# !references/*.h5
+
+# ── Logs et résultats intermédiaires ──────────────────────────────────────────
+logs/
+runs/
+wandb/
+mlruns/
