@@ -3,7 +3,7 @@
 Automatic detection of sleep apnea events from raw polysomnography (PSG) signals.
 Built for [ENS Challenge #45](https://challengedata.ens.fr/participants/challenges/45/).
 
-**Current score: 0.549 F1** (benchmark: 0.525 — top 10)
+**Best score: 0.636 F1 — 3rd place** (benchmark: 0.525)
 
 ## Problem
 
@@ -26,8 +26,9 @@ Given 90-second windows of 8 physiological signals recorded at 100Hz, predict a 
 
 - 4400 training windows, 4400 test windows
 - 22 subjects, 200 windows per subject
-- Apnea rate: ~6.9% (heavy class imbalance)
-- Average event duration: 18 seconds
+- Apnea rate: ~6.9% (heavy class imbalance, 93/7)
+- Average event duration: 18 seconds (min: 1s, max: 70s)
+- 79.5% of windows have no apnea event
 
 Data files (not included, download from challenge):
 ```
@@ -42,23 +43,73 @@ data/y_train_tX9Br0C.csv
 
 ```
 Input (B, 8, 9000) — 8 signals at 100Hz
-  → Encoder: 100Hz → 10Hz → 1Hz
-  → Bottleneck: dilated convolutions at 1Hz
-  → Decoder: attention-gated skip connections
-  → Head: (B, 90) logits at 1Hz
+  → Encoder block 1 : Conv1D(8,  64, k=9)  + residual  →  (B, 64,  9000)
+  → AvgPool1D(10)                                        →  (B, 64,  900)
+  → Encoder block 2 : Conv1D(64, 128, k=7) + residual  →  (B, 128, 900)
+  → AvgPool1D(10)                                        →  (B, 128, 90)
+  → Bottleneck      : 3× Conv1D dilated (d=1,2,4)       →  (B, 256, 90)
+  → Decoder         : upsample + attention gate + concat →  (B, 128, 900)
+  → AvgPool1D(10)   : back to 1Hz                        →  (B, 128, 90)
+  → Head            : Conv1D(384, 1)                     →  (B, 90)
 ```
 
-**Loss:** BCE (pos_weight=10) + Dice Loss  
-**Post-processing:** remove predicted events shorter than 9 seconds
+**Loss:** BCE (pos_weight=10) + Dice Loss (50/50)
 
-## Results
+## Experimental Results
 
-| Version | Normalization | Training | Val F1 | Test F1 |
-|---|---|---|---|---|
-| v2 | Global | 17 subjects | 0.345 | 0.473 |
-| v2 + post-proc | Global | 17 subjects | 0.423 | 0.549 |
-| v3 + post-proc | Per-window | 17 subjects | 0.401 | TBD |
-| v4 + post-proc | Per-window | 22 subjects | — | TBD |
+All experiments use:
+- Instance normalization (per window, per channel)
+- 5-fold GroupKFold cross-validation for hyperparameter calibration
+- Subject-based splits to avoid data leakage
+
+| Version | Model | Normalization | Subjects | Threshold | Min duration | Test F1 |
+|---|---|---|---|---|---|---|
+| v2 | UNet1D (base_filters=32) | Global | 17/22 | 0.60 | — | 0.473 |
+| v2 + post-proc | UNet1D (base_filters=32) | Global | 17/22 | 0.60 | 9s | 0.549 |
+| v3 | UNet1D (base_filters=32) | Per-window | 17/22 | 0.60 | 9s | 0.614 |
+| v4 | UNet1D (base_filters=32) | Per-window | 22/22 | 0.60 | 9s | 0.624 |
+| v5 | UNet1D (base_filters=64) | Per-window | 22/22 | 0.60 | 9s | 0.630 |
+| **v5** | **UNet1D (base_filters=64)** | **Per-window** | **22/22** | **0.70** | **9s** | **0.636** |
+| v5 + CV | UNet1D (base_filters=64) | Per-window | 22/22 | 0.70 | 10s | TBD |
+
+### Key findings
+
+| Improvement | Delta F1 | Method |
+|---|---|---|
+| Post-processing (min event duration) | +0.076 | Remove predicted events < 9s |
+| Instance normalization | +0.065 | Normalize each window independently |
+| Train on all 22 subjects | +0.010 | No held-out val split for training |
+| Larger model (32→64 filters) | +0.006 | 745K → 3M parameters |
+| Higher threshold (0.60→0.70) | +0.006 | Reduce false positives |
+
+### Hyperparameter calibration (5-fold CV)
+
+Threshold and min_duration were calibrated via 5-fold GroupKFold cross-validation on all 4400 training windows (no data leakage):
+
+- **OOF F1: 0.5758** at threshold=0.70, min_duration=10s
+- Grid search over threshold ∈ [0.40, 0.80] × min_duration ∈ [5, 15]
+
+## Training Configuration
+
+```yaml
+model:
+  name: unet1d
+  base_filters: 64
+  dropout: 0.4
+
+training:
+  batch_size: 32
+  n_epochs: 12        # fixed (determined by early stopping on val split)
+  lr: 0.001
+  weight_decay: 0.001
+
+loss:
+  name: combined      # BCE (pos_weight=10) + Dice
+  pos_weight: 10.0
+
+data:
+  instance_norm: true
+```
 
 ## Project Structure
 
@@ -66,7 +117,7 @@ Input (B, 8, 9000) — 8 signals at 100Hz
 src/
 ├── data/
 │   ├── dataset.py          # PyTorch Dataset, subject-aware train/val split
-│   ├── preprocessing.py    # Global and per-window normalization
+│   ├── preprocessing.py    # Global and per-window (instance) normalization
 │   └── augmentation.py     # Scaling, jitter, channel dropout
 ├── models/
 │   ├── cnn1d.py            # Baseline CNN
@@ -80,7 +131,8 @@ src/
     └── submission.py
 
 scripts/
-├── train.py                # Main training script
+├── train.py                # Training (with or without val split)
+├── cross_validate.py       # 5-fold CV — calibrates threshold & min_duration
 ├── predict.py              # Generate submission CSV
 ├── evaluate.py             # Threshold sweep on val set
 └── sanity_check.py         # Verify setup before training
@@ -95,10 +147,10 @@ notebooks/eda.ipynb         # Data exploration
 python -m venv .venv
 .venv\Scripts\activate
 
-# CPU
-pip install torch --index-url https://download.pytorch.org/whl/cpu
 # GPU (CUDA 12.4)
 pip install torch --index-url https://download.pytorch.org/whl/cu124
+# CPU only
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 pip install h5py pandas numpy scikit-learn pyyaml tqdm matplotlib
 ```
@@ -106,22 +158,24 @@ pip install h5py pandas numpy scikit-learn pyyaml tqdm matplotlib
 ## Usage
 
 ```bash
-# Verify setup
+# 1. Verify setup
 python scripts/sanity_check.py
 
-# Train (with subject-based val split)
-python scripts/train.py
+# 2. Run 5-fold CV to find optimal threshold and min_duration
+python scripts/cross_validate.py
 
-# Train on all subjects for final submission
+# 3. Train on all subjects with fixed epochs
 python scripts/train.py --all_subjects
 
-# Generate submission
-python scripts/predict.py
+# 4. Generate submission with CV-calibrated hyperparameters
+python scripts/predict.py --threshold 0.70 --min_duration 10
 ```
 
-## Key Design Choices
+## Leaderboard
 
-- **Subject-based split:** validation set never shares subjects with training to avoid data leakage
-- **Per-window normalization:** each 90s window normalized independently to remove inter-subject baseline differences
-- **Event post-processing:** predicted events shorter than 9s are removed (reduces false positives without hurting recall)
-- **pos_weight=10:** addresses the 93/7 class imbalance in the BCE loss
+| Rank | Participant | Score |
+|---|---|---|
+| 1 | leo_h | 0.6699 |
+| 2 | clementg & LB | 0.6503 |
+| **3** | **Mateo & Theo** | **0.636** |
+| 16 | benchmark | 0.5254 |
