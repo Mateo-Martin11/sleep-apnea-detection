@@ -14,7 +14,7 @@ data:
 model:
   name: "unet1d"          # "cnn1d" or "unet1d"
   n_channels: 8
-  base_filters: 32
+  base_filters: 64
   dropout: 0.4
 
 # ── Training ──────────────────────────────────────────────────────────────────
@@ -45,4 +45,4 @@ scheduler:
 output:
   checkpoint_dir: "checkpoints"
   submission_dir: "submissions"
-  model_name: "unet1d_v4"
+  model_name: "unet1d_v5"
